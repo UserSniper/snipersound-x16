@@ -1,0 +1,164 @@
+;; SNIPERSOUND SONG FORMAT
+; note that all multi-byte entries are little-endian, meaning
+; lowest byte first, highest byte last.
+
+
+; alright, here's the order in which everything goes:
+; > INSTRUMENT HEADERS POINTER
+; > SAMPLE HEADERS POINTER
+; > FIRST COMMAND STREAM POINTER 
+;   + x16, one for each channel. fitting!
+;   + the last one is for the audio fifo,
+;     NOT the 16th psg channel.
+; 
+; > INSTRUMENT HEADERS
+;   + each consists of four words
+;     - volume
+;     - arpeggio
+;     - duty cycle
+;     - pitch
+;   + example: .word @Venv0, @Aenv0, @Denv0, @Penv0
+;
+; > ENVELOPES
+;   + listed in pretty much whatever order
+;   + example:
+;     ; @Denv0:
+;     ;     .byte $07,$cf,$c7,$c4,$c2,$00,$03,$c1,$c0,$00,$08
+;     ; @Venv0:
+;     ;     .byte $01,$bf,$00,$01
+;     ...so on and so forth.
+;
+; > SAMPLES
+;   + Samples are aligned to bank boundaries (8192 bytes)
+;   + 2 bytes: first is the bank number, second is the pitch
+;   + example:
+;     ; @samples:
+;     ;     .byte $00,$80 ; bank 0, 48 kilohertz
+;
+; > COMMAND STREAM
+;   + starts with @ch0, and goes from there
+
+
+
+
+
+;;
+;; DOCUMENTATION OF DATA TYPES
+;;
+
+; INSTRUMENT HEADERS POINTER
+; 15 bit  8  7  bit  0
+; 101i iiii  iiii iiii
+; |||| ||||  |||| ||||
+; ++++-++++--++++-++++- Instrument header pointer
+
+; SAMPLE HEADERS POINTER
+; 15 bit  8  7  bit  0
+; 101s ssss  ssss ssss
+; |||| ||||  |||| ||||
+; ++++-++++--++++-++++- Sample header pointer
+
+
+;
+; ENVELOPE FORMAT
+; volume, arpeggio, duty, pitch
+
+; ok so to explain this one, i need an example:
+; .byte $07, $xx, $00,$01, $xx, $xx, $00,$05
+
+; first byte
+;  release
+; 7  bit  0
+; 0rrr rrrr
+;  ||| ||||
+;  +++-++++- Position in envelope to jump to when a note release
+;            command is given ($00-$7f)
+
+; last byte
+; loop point
+; 7  bit  0
+; 0rrr rrrr
+;  ||| ||||
+;  +++-++++- Position in envelope to jump to when looping ($00-$7f)
+;            This is always preceded by a null byte ($00).
+;            This byte pair can also be anywhere in the middle of
+;            the envelope, as long as there is one byte of envelope
+;            data before the loop point.
+
+; env. data
+; 7  bit  0
+; 1HEE EEee
+;  ||| ||||
+;  +++-++++- Value ($00-$7f)
+;            NOTE:
+;             - Panning and Waveform can be $00-$03 (e only)
+;             - Volume and Duty can be $00-$3f (E + e)
+;             - Pitch and Arpeggio can use the full range (H + E + e)
+
+
+
+; COMMAND STREAM BYTES
+
+;   notes
+; 7  bit  0
+; 00nn nnnn
+;   || ||||
+;   ++-++++- Note value ($00-$3f)
+
+; commands
+; 7  bit  0
+; 01nn nnnn
+;   || ||||
+;   ++-++++- Command ($00-$3f)
+
+; instrument
+; 7  bit  0
+; 10nn nnnn
+;   || ||||
+;   ++-++++- Instrument ($00-$3f)
+
+; wait rows
+; 7  bit  0
+; 11nn nnnn
+;   || ||||
+;   ++-++++- Rows to wait ($00-$3f)
+
+
+;      opcode list:
+;       $00 | stop note
+            
+; $01 - $3f | note (C-1 - D-6)
+;
+;       $40 | Extended Note
+;           | args: 1 byte
+;           | $00 - $0c = C-0 - B-0
+;           | $4c - $60 = D#6 - B-7
+;
+;       $41 | Set Reference Point
+;           | args: 1 byte, 1 word
+;           | byte is the number of notes/waits to reference
+;           | word is the address of the reference data
+;           |
+;           | use this to optimize your songs!
+;
+;       $42 | Loop
+;           | args: 1 word
+;           | word is the address of the loop point
+;           | in the song.
+;           
+;       $43 | Disable Attack
+;           | do not reset envelope position to 0 for
+;           | the next note
+;
+;       $44 | End Song
+;           | signal to the driver that the song is over
+;
+;       $45 | Release Note
+;           | jump all instrument envelopes to their
+;           | "release" position
+;
+;       $46 | Speed
+;           | args: 1 byte
+;           | byte set the amount of ticks to wait before
+;           | progressing to the next note.
+;
