@@ -54,11 +54,8 @@ jmp ss_song_play
 
 ;
 ; INITIALIZE THE SOUND DRIVER
-; args: A: bank where the song is located
 ;
 .proc ss_init
-    sta ss_v_song_bank
-
     ;; ok so first we need to clear the psg buffer
     ; set address
     lda #<ss_v_psg_buffer 
@@ -393,10 +390,13 @@ ss_d_channel_opcode_table_hi:
 
 
 
-
-
-
+;
+; PLAY THE SONG
+; args: A: bank where the song is located
+;
 .proc ss_song_play
+    sta ss_v_song_bank
+    
     ;; set up the zeropage register we need to fetch bytes
     ldx #$a0
     stz gREG::r15L
