@@ -22,6 +22,7 @@ jmp ss_song_play
     ss_v_song_bank:         .res 1
     
     ;; pointers to stuff
+    ss_scratch:             .res 1
     ss_v_instruments_ptr:   .res 2
     ss_v_samples_ptr:       .res 2
 
@@ -39,13 +40,17 @@ jmp ss_song_play
     ss_v_current_channel:   .res 1
     ss_v_ch_ticks_to_wait:  .res 16
 
-    ss_scratch:             .res 1
     ss_v_ch_ref_note_count: .res 16
     ss_v_ch_ref_ptr_lo:     .res 16
     ss_v_ch_ref_ptr_hi:     .res 16
 
     ; envelopes
     ss_v_ch_instrument:     .res 16
+
+    ss_v_ch_vol_env_ptr_lo:     .res 16
+    ss_v_ch_vol_env_ptr_hi:     .res 16
+    ss_v_ch_vol_env_release_pos:.res 16
+
     ss_v_ch_vol_env_pos:    .res 16
 
 
@@ -54,8 +59,11 @@ jmp ss_song_play
 
 ;
 ; INITIALIZE THE SOUND DRIVER
+; args: A: bank where the song is located
 ;
 .proc ss_init
+    sta ss_v_song_bank
+
     ;; ok so first we need to clear the psg buffer
     ; set address
     lda #<ss_v_psg_buffer 
@@ -80,11 +88,12 @@ jmp ss_song_play
     inc ss_scratch
     stz ss_v_current_channel
 
+
     @LOOP_POINT:
 
         ; check channel count
         ldx ss_v_current_channel
-        cpx #$02
+        cpx #$0f
         bne :+
             jmp @EXIT_LOOP_POINT
         :
@@ -147,6 +156,7 @@ jmp ss_song_play
             sta ss_v_psg_buffer + 1, y;
 
             ldx ss_v_current_channel
+            stz ss_v_ch_vol_env_pos, x
             inc ss_v_pattern_ptr_lo, x
             bne :+
                 inc ss_v_pattern_ptr_hi, x
@@ -176,10 +186,11 @@ jmp ss_song_play
         @bit7:
             ; from here, if bit 6 is set, it's rows to wait.
             ; otherwise, it's an instrument number.
-            ldx ss_v_current_channel
             bvs @is_wait
 
             @is_instrument:
+                jsr ss_i_change_instrument
+
                 inc ss_v_pattern_ptr_lo, x
                 bne :+
                     inc ss_v_pattern_ptr_hi, x
@@ -188,6 +199,7 @@ jmp ss_song_play
 
             @is_wait:
                 and #%00111111
+                ldx ss_v_current_channel
                 sta ss_v_ch_ticks_to_wait,x
 
                 inc ss_v_pattern_ptr_lo, x
@@ -195,8 +207,7 @@ jmp ss_song_play
                     inc ss_v_pattern_ptr_hi, x
                 :
                 jsr ss_41_check_reference_point
-                inc ss_v_current_channel
-                jmp @LOOP_POINT
+                jmp @END_OF_TICK
 
         @is_opcode:
             ;cmp #$46
@@ -215,7 +226,7 @@ jmp ss_song_play
 
 
     @END_OF_TICK:
-        ;jsr tick_envelope
+        jsr ss_i_tick_envelope
         inc ss_v_current_channel
         jmp @LOOP_POINT
 
@@ -242,7 +253,7 @@ jmp ss_song_play
     :
     sta ss_v_tempo_accumulator + 1
 
-    jmp ss_copy_buffer_to_vera
+    jmp ss_i_copy_buffer_to_vera
 .endproc
 
 
@@ -270,6 +281,8 @@ ss_40_extended_note:
     sta ss_v_psg_buffer + 1, y;
     
     ldx ss_v_current_channel
+    stz ss_v_ch_vol_env_pos, x
+
     lda ss_v_pattern_ptr_lo, x
     clc
     adc #2
@@ -278,6 +291,7 @@ ss_40_extended_note:
         inc ss_v_pattern_ptr_hi, x
     :
     jsr ss_41_check_reference_point
+    jsr ss_i_tick_envelope
     inc ss_v_current_channel
     rts
 
@@ -369,7 +383,10 @@ ss_46_speed:
     :
     rts
 
-
+;
+; t' opcode table yea
+; right proper diabetic coma
+;
 ss_d_channel_opcode_table_lo:
     .byte <ss_40_extended_note 
     .byte <ss_41_set_reference_point 
@@ -389,14 +406,11 @@ ss_d_channel_opcode_table_hi:
 
 
 
-
 ;
-; PLAY THE SONG
-; args: A: bank where the song is located
+;
+;
 ;
 .proc ss_song_play
-    sta ss_v_song_bank
-    
     ;; set up the zeropage register we need to fetch bytes
     ldx #$a0
     stz gREG::r15L
@@ -404,15 +418,13 @@ ss_d_channel_opcode_table_hi:
     
     ;; fetch the instrument/sample pointers
     ldy #0
-    :
-        jsr ss_fetch
 
-        ; the byte fetched is now in A
-        sta ss_v_instruments_ptr, y
+    jsr ss_fetch
+    sta ss_v_instruments_ptr, y
 
-        iny
-        cpy #4
-        bne :-
+    iny
+    jsr ss_fetch
+    sta ss_v_instruments_ptr, y
 
     lda gREG::r15L
     clc
@@ -489,8 +501,117 @@ ss_d_channel_opcode_table_hi:
     lda #<gREG::r15
     jmp FETCH
 .endproc
+.proc ss_fetch_env
+    phx
+    ldx ss_v_song_bank
+    lda #<gREG::r12
+    jsr FETCH
 
-.proc ss_copy_buffer_to_vera
+    plx
+    rts
+.endproc
+
+.proc ss_i_change_instrument
+    and #%00111111
+
+    ldx ss_v_current_channel
+    sta ss_v_ch_instrument, x
+
+    lda ss_v_instruments_ptr + 0
+    sta gREG::r12L
+    lda ss_v_instruments_ptr + 1
+    sta gREG::r12H
+
+    lda ss_v_ch_instrument, x
+    ;asl
+    ;asl
+    ;asl
+    ;asl     ; ONLY 16 INSTRUMENTS... FOR NOW
+
+    tay
+
+    ; volume envelope pointer
+    jsr ss_fetch_env
+    sta ss_v_ch_vol_env_ptr_lo, x
+    iny
+
+    jsr ss_fetch_env
+    sta ss_v_ch_vol_env_ptr_hi, x
+    iny
+
+    stz ss_v_ch_vol_env_pos, x
+
+    ; arpeggio envelope pointer
+
+    ; dutycycle envelope pointer
+
+    ; pitch envelope pointer
+
+    ; waveform envelope pointer
+
+    ; panning envelope pointer
+
+    
+
+    rts
+.endproc
+
+.proc ss_i_tick_envelope
+    ldx ss_v_current_channel
+
+    ; volume
+    lda ss_v_ch_vol_env_ptr_lo, x
+    sta gREG::r15L
+    lda ss_v_ch_vol_env_ptr_hi, x
+    sta gREG::r15H
+
+    ldy ss_v_ch_vol_env_pos, x
+    ; if position is zero, set the release point
+    cpy #0
+    bne :+
+        phx
+        jsr ss_fetch
+        plx
+        sta ss_v_ch_vol_env_release_pos, x
+    :
+
+    inc ss_v_ch_vol_env_pos, x
+    ldy ss_v_ch_vol_env_pos, x
+    @retry:
+    phx
+    jsr ss_fetch
+    plx
+
+    ; if byte is zero, we need to set the position
+    cmp #0
+    bne :+
+        iny
+        phx
+        jsr ss_fetch
+        plx
+        sta ss_v_ch_vol_env_pos, x
+        tay
+        bra @retry
+    :
+
+    ; mask away the panning bits
+    and #$3f
+    sta gREG::r12L
+    txa
+    asl
+    asl
+    tax
+    lda ss_v_psg_buffer + 2, x 
+    and #$c0
+    ora gREG::r12L
+    sta ss_v_psg_buffer + 2, x 
+    
+
+    rts
+
+.endproc
+
+.proc ss_i_copy_buffer_to_vera
     ; preserve vram address
     lda VERA::CTRL 
     pha

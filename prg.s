@@ -31,8 +31,12 @@ start:
     lda # $3b | %11000000
     sta $bfc2
     sta $bfc2+4
-    sta $bfc2+8
-    sta $bfc2+$c
+    ;sta $bfc2+8
+    ;sta $bfc2+$c
+
+    lda # $1f
+    sta $bfc3
+    sta $bfc3+4
 
 
     lda #$32
